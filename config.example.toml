@@ -1,0 +1,26 @@
+# NR2 Configuration Example
+
+# Source relays - where to read events from
+sources = [
+    "wss://relay.damus.io",
+    "wss://relay.nostr.band",
+    "wss://nostr.wine",
+]
+
+# Sinks - where to send events after processing
+
+# Passthrough processor - forwards all events without filtering
+# [[sinks]]
+# processor = { type = "Passthrough" }
+# relays = ["wss://nos.lol", "wss://relay.nostr.bg"]
+
+[[sinks]]
+# Geohash filter - only forwards events with 'g' tag
+# Optional: specify allowed_prefixes to filter by specific geohash prefixes
+processor = { type = "GeohashFilter", allowed_prefixes = [] }
+relays = ["ws://localhost:3000"]
+
+# Example with specific geohash prefix filtering
+# [[sinks]]
+# processor = { type = "GeohashFilter", allowed_prefixes = ["u0", "u1", "u2"] }
+# relays = ["wss://relay.example.com"]
