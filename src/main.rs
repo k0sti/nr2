@@ -1,6 +1,8 @@
 mod config;
 mod processor;
 mod relay_manager;
+mod state;
+mod timespan;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -9,6 +11,7 @@ use tracing_subscriber;
 
 use crate::config::Config;
 use crate::relay_manager::RelayManager;
+use crate::state::ProcessingState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,8 +38,13 @@ async fn main() -> Result<()> {
     info!("Configuration loaded:");
     info!("  Source relays: {:?}", config.sources);
     info!("  Sinks: {} configured", config.sinks.len());
+    info!("  State file: {}", config.state_file);
 
-    let relay_manager = RelayManager::new(config).await?;
+    // Load or create processing state
+    let state_path = PathBuf::from(&config.state_file);
+    let state = ProcessingState::load(&state_path).await?;
+
+    let relay_manager = RelayManager::new(config.clone(), state).await?;
 
     let shutdown = tokio::signal::ctrl_c();
 
@@ -52,6 +60,10 @@ async fn main() -> Result<()> {
     }
 
     info!("Shutting down...");
+
+    // Save final state before disconnecting
+    relay_manager.save_state().await?;
+
     relay_manager.disconnect().await?;
 
     Ok(())

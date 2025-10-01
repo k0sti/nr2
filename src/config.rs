@@ -5,6 +5,12 @@ use std::path::Path;
 pub struct Config {
     pub sources: Vec<String>,
     pub sinks: Vec<SinkConfig>,
+    #[serde(default = "default_state_file")]
+    pub state_file: String,
+}
+
+fn default_state_file() -> String {
+    "nr2_state.json".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +50,7 @@ impl Default for Config {
                     relays: vec!["wss://nos.lol".to_string()],
                 },
             ],
+            state_file: default_state_file(),
         }
     }
 }
