@@ -5,8 +5,8 @@ use nostr::Timestamp;
 use std::str::FromStr;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "nr2")]
-#[command(about = "Nostr Relay Router - Routes events between relays with processing")]
+#[command(name = "flow")]
+#[command(about = "EventFlow - Routes and processes Nostr events between relays")]
 pub struct Cli {
     /// Show current processing state
     #[arg(long)]

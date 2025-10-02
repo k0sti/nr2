@@ -1,0 +1,15 @@
+# Test configuration with global filters
+sources = [
+    "wss://relay.damus.io",
+]
+
+# Global filter - only fetch kind 1 (text notes)
+filters = [
+    { kinds = [1] }
+]
+
+[[sinks]]
+processor = { type = "Passthrough" }
+relays = ["ws://localhost:3001"]
+
+state_file = "test_filter_state.json"

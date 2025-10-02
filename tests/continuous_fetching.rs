@@ -1,5 +1,5 @@
-use nr2::state::ProcessingState;
-use nr2::timespan::TimeSpan;
+use eventflow::state::ProcessingState;
+use eventflow::timespan::TimeSpan;
 use nostr::prelude::*;
 
 #[test]

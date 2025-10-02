@@ -3,36 +3,50 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-NR2 (Nostr Relay Router) is a Rust application for routing and processing Nostr events between relays with time-based state tracking and gap filling capabilities.
+EventFlow (Nostr EventFlow) is a Rust library and CLI application for routing and processing Nostr events between relays with time-based state tracking and gap filling capabilities. It can be used both as a standalone binary (`flow`) and as a library (`eventflow`).
 
 ## Build & Development Commands
 
 ```bash
 # Build the project
 cargo build
+just build
 
-# Build release version
-cargo build --release
-
-# Run tests
+# Run tests (including integration tests)
 cargo test
+cargo test --lib           # Run unit tests only
+cargo test --test '*'       # Run integration tests only
 
-# Check code without building
-cargo check
+# Linting and formatting
+cargo fmt                   # Format code
+cargo clippy               # Lint code
+cargo check                # Check compilation without building
 
-# Format code
-cargo fmt
-
-# Lint code
-cargo clippy
+# Run examples
+cargo run --example custom_processor
+cargo run --example simple_relay_router
 ```
 
 ## Running the Application
 
-### Core Modes
+### Using Just Commands (Preferred)
+```bash
+just run                    # Stream live events (default)
+just stream                 # Stream live events
+just show-state            # Show current processing state
+just gaps                  # Fill gaps in existing data
+just fetch-1h              # Fetch last hour of events
+just fetch-1d              # Fetch last day of events
+just fetch-continuous      # Continuously fetch backwards through time
+just debug                 # Run with debug logging (suppresses nostr-sdk noise)
+just test                  # Test run with debug output (first 50 lines)
+```
+
+### Direct CLI Usage
 ```bash
 # Stream live events
 cargo run -- --stream
+# or if installed: flow --stream
 
 # Show current processing state
 cargo run -- --show-state
@@ -52,40 +66,61 @@ cargo run -- --stream --fetch-back 24h
 
 ### Environment Variables
 ```bash
-# Control logging levels
-RUST_LOG="nr2=info"  # Show info logs for nr2
-RUST_LOG="nr2=debug,nostr_relay_pool::relay::inner=warn"  # Debug with reduced relay noise
+# Control logging levels (note: binary name is 'nostr-eventflow' in logs)
+RUST_LOG="nr2=info"                                              # Info logging
+RUST_LOG="nr2=debug,nostr_relay_pool::relay::inner=warn"        # Debug with reduced relay noise
+RUST_LOG="nr2=trace"                                            # Trace logging for detailed debugging
 ```
 
 ## Architecture
 
-### Module Structure
-- `main.rs` - Entry point, CLI handling, orchestrates relay manager
-- `cli.rs` - Command-line argument parsing and validation
-- `relay_manager.rs` - Core logic for connecting to relays, fetching/streaming events
-- `processor.rs` - Event processing pipeline (passthrough, geohash filtering)
-- `config.rs` - Configuration loading (TOML format)
+### Dual Nature: Library and Binary
+- **Library** (`src/lib.rs`): Exposes public API for use in other projects
+- **Binary** (`src/main.rs`): CLI tool using the library
+
+### Core Modules
+- `relay_router.rs` - Main router managing event flow between relays with builder pattern support
+- `relay_manager.rs` - Low-level relay connection management, fetching, and streaming
+- `fetcher.rs` - Event fetching logic with time range support
+- `processor.rs` - Event processing trait and built-in processors (Passthrough, GeohashFilter)
 - `state.rs` - Persistent state tracking for processed time spans
 - `timespan.rs` - Time span management with automatic merging of overlapping ranges
+- `config.rs` - TOML configuration parsing for sources, sinks, and processors
+- `cli.rs` - Command-line argument parsing and validation
 
 ### Data Flow
-1. **Sources**: Events are fetched from source relays (configured in config.toml)
-2. **Processing**: Events pass through configured processors (Passthrough, GeohashFilter)
-3. **Sinks**: Processed events are forwarded to sink relays
-4. **State Tracking**: TimeSpanSet tracks which time ranges have been processed to avoid duplicates
+1. **Sources**: Events fetched/streamed from configured source relays
+2. **Processing**: Events pass through processors (implementing `Processor` trait)
+3. **Routing**: Processed events are routed to specific sink relays based on configuration
+4. **State Tracking**: TimeSpanSet tracks processed ranges to prevent re-processing
 
 ### Key Concepts
-- **Time Spans**: The system tracks processed time ranges to enable gap filling and prevent re-fetching
-- **Sessions**: Stream mode creates sessions that track continuous event processing
-- **Gap Filling**: Automatically identifies and fetches missing time periods in collected data
-- **Processors**: Modular event filtering system (extensible via Processor trait)
+- **Time Spans**: Contiguous time ranges that have been processed, automatically merged when overlapping
+- **Sessions**: Stream mode creates sessions tracking continuous event processing
+- **Gap Detection**: Identifies missing time periods between processed spans
+- **Processors**: Modular system for filtering/transforming events (must be `Send + Sync`)
+- **Builder Pattern**: `RelayRouterBuilder` for flexible router configuration
 
 ## Configuration
-The app uses `config.toml` for relay and processor configuration. See `config.example.toml` for reference.
+Uses `config.toml` in the working directory. Structure:
+```toml
+sources = ["wss://relay1.com", "wss://relay2.com"]
+
+[[sinks]]
+processor = { type = "Passthrough" }  # or "GeohashFilter" with allowed_prefixes
+relays = ["wss://sink1.com"]
+```
 
 ## State Persistence
-Processing state is saved to `nr2_state.json` (configurable) containing:
-- Collected time spans
+Processing state saved to `eventflow_state.json` (default) or `--state-file` path:
+- Time spans collected
 - Session information
 - Processing statistics
-- Total events processed
+- Can be disabled with `--no-state` flag
+
+## Library Usage
+When using as a library, the main entry points are:
+- `RelayRouter` - Main router class
+- `RelayRouterBuilder` - Builder for configuring routers
+- `Processor` trait - Implement for custom processors
+- Public types re-exported in `lib.rs` for convenience

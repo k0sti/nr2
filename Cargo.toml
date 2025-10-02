@@ -1,11 +1,21 @@
 [package]
-name = "nr2"
+name = "nostr-eventflow"
 version = "0.1.0"
 edition = "2024"
+authors = ["EventFlow Contributors"]
+description = "Nostr EventFlow - A flexible event routing and processing library for Nostr relays"
+repository = "https://github.com/yourusername/nostr-eventflow"
+license = "MIT"
+keywords = ["nostr", "relay", "router", "event", "processor"]
+categories = ["network-programming", "asynchronous"]
 
 [lib]
-name = "nr2"
+name = "eventflow"
 path = "src/lib.rs"
+
+[[bin]]
+name = "flow"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -19,3 +29,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
+
+[[example]]
+name = "custom_processor"
+path = "examples/custom_processor.rs"
+
+[[example]]
+name = "simple_relay_router"
+path = "examples/simple_relay_router.rs"

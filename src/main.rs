@@ -9,8 +9,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::cli::Cli;
 use crate::relay_manager::RelayManager;
-use nr2::config::Config;
-use nr2::state::ProcessingState;
+use eventflow::config::Config;
+use eventflow::state::ProcessingState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,15 +26,15 @@ async fn main() -> Result<()> {
     }
 
     // Configure logging with EnvFilter
-    // Default: show debug for nr2, only warnings for nostr_relay_pool::relay::inner
+    // Default: show debug for eventflow, only warnings for nostr_relay_pool::relay::inner
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("nr2=debug,nostr_relay_pool::relay::inner=warn,nostr_relay_pool=info"));
+        .unwrap_or_else(|_| EnvFilter::new("eventflow=debug,nostr_relay_pool::relay::inner=warn,nostr_relay_pool=info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
 
-    info!("Starting NR2 - Nostr Relay Router");
+    info!("Starting EventFlow - Nostr Event Router");
 
     let config_path = PathBuf::from("config.toml");
 
@@ -130,7 +130,7 @@ async fn show_state() -> Result<()> {
     };
 
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║                    NR2 Processing State                      ║");
+    println!("║                EventFlow Processing State                    ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║ Total Events Processed: {:>36} ║", state.total_events_processed);
     println!("║ Total Sessions:         {:>36} ║", state.stats.sessions_count);

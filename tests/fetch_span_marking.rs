@@ -1,4 +1,4 @@
-use nr2::state::ProcessingState;
+use eventflow::state::ProcessingState;
 use nostr::prelude::*;
 
 #[test]
