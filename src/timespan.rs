@@ -36,6 +36,7 @@ impl TimeSpan {
     }
 
     /// Check if a timestamp is within this span
+    #[allow(dead_code)]
     pub fn contains(&self, timestamp: Timestamp) -> bool {
         timestamp >= self.start && timestamp <= self.end
     }
@@ -109,6 +110,7 @@ impl TimeSpanSet {
     }
 
     /// Check if a timestamp has been processed
+    #[allow(dead_code)]
     pub fn contains(&self, timestamp: Timestamp) -> bool {
         self.spans.iter().any(|span| span.contains(timestamp))
     }

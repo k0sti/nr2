@@ -123,6 +123,7 @@ impl ProcessingState {
     }
 
     /// Get gaps in collected time spans
+    #[allow(dead_code)]
     pub fn get_gaps(&self, from: Timestamp, to: Timestamp) -> Vec<(Timestamp, Timestamp)> {
         self.collected_spans.get_gaps(from, to)
             .into_iter()
@@ -131,6 +132,7 @@ impl ProcessingState {
     }
 
     /// Check if a timestamp has already been collected
+    #[allow(dead_code)]
     pub fn is_collected(&self, timestamp: Timestamp) -> bool {
         self.collected_spans.contains(timestamp)
     }
@@ -147,6 +149,7 @@ impl ProcessingState {
     }
 
     /// Mark a gap as filled
+    #[allow(dead_code)]
     pub fn mark_gap_filled(&mut self, start: Timestamp, end: Timestamp) {
         self.collected_spans.add_span(start, end);
         self.stats.total_gaps_filled += 1;
