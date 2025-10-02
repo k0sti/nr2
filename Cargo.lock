@@ -952,6 +952,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nostr-eventflow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "nostr",
+ "nostr-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nostr-relay-pool"
 version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -979,23 +996,6 @@ dependencies = [
  "nostr-database",
  "nostr-relay-pool",
  "tokio",
-]
-
-[[package]]
-name = "nr2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "nostr",
- "nostr-sdk",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

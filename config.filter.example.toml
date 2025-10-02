@@ -1,0 +1,77 @@
+# EventFlow Configuration with Filter Examples
+# Filters are applied at the source level when subscribing to relays
+
+# Source relays - where to read events from
+sources = [
+    "wss://relay.damus.io",
+    "wss://relay.nostr.band",
+    "wss://nostr.wine",
+]
+
+# Example 1: Filter by event kinds only
+# Only fetch text notes (kind 1) and reactions (kind 7) from sources
+filters = [
+    { kinds = [1, 7] }
+]
+
+# Example 2: Filter by specific authors
+# filters = [
+#     { authors = [
+#         "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2",  # jack
+#         "6e468422dfb74a5738702a8823b9b28168abab8655faacb6853cd0ee15deee93"   # gigi
+#     ] }
+# ]
+
+# Example 3: Filter by tags - only events with specific geohash prefixes
+# filters = [
+#     { "#g" = ["u0", "u1", "u2"] }  # Events with geohash tags starting with u0, u1, or u2
+# ]
+
+# Example 4: Combined filter - specific kinds AND specific authors
+# filters = [
+#     {
+#         kinds = [1, 0],  # Text notes and metadata
+#         authors = ["82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2"]
+#     }
+# ]
+
+# Example 5: Multiple filters with OR logic
+# Events matching ANY of these filters will be fetched
+# filters = [
+#     { kinds = [1] },                    # All text notes OR
+#     { kinds = [7], "#p" = ["82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2"] }  # Reactions mentioning jack
+# ]
+
+# Example 6: Filter for replies (events with 'e' tags)
+# filters = [
+#     {
+#         kinds = [1],
+#         "#e" = [
+#             "5c83da77af1dec6d7289834998ad7aafbd9e2191396d75ec3cc27f5a77226f36",
+#             "a16c8b8e3df8c4be6c87ba84b4b1b757c8bbf03acb6f7c9b4279d7fbbefa5dc5"
+#         ]  # Only events replying to these specific events
+#     }
+# ]
+
+# Sinks - where processed events go
+# Each sink has a processor and target relays
+
+# Passthrough processor - forwards all events without modification
+[[sinks]]
+processor = { type = "Passthrough" }
+relays = ["ws://localhost:3001"]
+
+# GeohashFilter processor - additional filtering after source filters
+# This would only process events that have geohash tags with specific prefixes
+# Useful when you want different processing for different event types
+[[sinks]]
+processor = { type = "GeohashFilter", allowed_prefixes = ["u0q", "u0w"] }
+relays = ["ws://localhost:3002"]
+
+# Another passthrough for archival
+[[sinks]]
+processor = { type = "Passthrough" }
+relays = ["ws://localhost:3003"]
+
+# State file for tracking processed events
+state_file = "filter_example_state.json"

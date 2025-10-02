@@ -1,3 +1,4 @@
 /target
 config.toml
-nr2_state.json
+*_state.json
+CLAUDE.md
