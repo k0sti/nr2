@@ -10,7 +10,7 @@ pub struct Config {
 }
 
 fn default_state_file() -> String {
-    "nr2_state.json".to_string()
+    "nef_state.json".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

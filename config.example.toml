@@ -1,4 +1,4 @@
-# NR2 Configuration Example
+# EventFlow Configuration Example
 
 # Source relays - where to read events from
 sources = [

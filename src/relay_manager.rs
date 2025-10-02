@@ -7,10 +7,10 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::cli::{FetchMode, parse_duration, timestamp_from_date, timestamp_from_duration_ago};
-use nr2::config::Config;
-use nr2::fetcher::Fetcher;
-use nr2::processor::{create_processor, Processor};
-use nr2::state::ProcessingState;
+use eventflow::config::Config;
+use eventflow::fetcher::Fetcher;
+use eventflow::processor::{create_processor, Processor};
+use eventflow::state::ProcessingState;
 
 #[derive(Clone)]
 pub struct RelayManager {
