@@ -12,6 +12,10 @@ pub struct Cli {
     #[arg(long)]
     pub show_state: bool,
 
+    /// Skip loading and saving persistent state (useful for testing)
+    #[arg(long)]
+    pub no_state: bool,
+
     /// Use streaming collector for live events
     #[arg(long)]
     pub stream: bool,
@@ -27,10 +31,6 @@ pub struct Cli {
     /// Fetch events starting from a specific date (yyyy-mm-dd)
     #[arg(long, value_name = "DATE")]
     pub fetch_from: Option<String>,
-
-    /// Continuously fetch events backwards through time, stepping back by --step size
-    #[arg(long)]
-    pub fetch_continuous: bool,
 
     /// Step size for chunked fetching (e.g., 1h, 6h, 1d)
     #[arg(long, value_name = "DURATION")]
@@ -52,7 +52,6 @@ impl Cli {
             self.fetch_gaps,
             self.fetch_back.is_some(),
             self.fetch_from.is_some(),
-            self.fetch_continuous,
         ]
         .iter()
         .filter(|&&x| x)
@@ -60,7 +59,7 @@ impl Cli {
 
         if fetch_modes > 1 {
             return Err(anyhow!(
-                "Fetch options are mutually exclusive: choose only one of --fetch-gaps, --fetch-back, --fetch-from, or --fetch-continuous"
+                "Fetch options are mutually exclusive: choose only one of --fetch-gaps, --fetch-back, or --fetch-from"
             ));
         }
 
@@ -71,11 +70,10 @@ impl Cli {
             ));
         }
 
-        // --step requires --fetch-continuous if no other fetch mode uses it
-        if self.step.is_some() && !self.fetch_continuous &&
-           !self.fetch_back.is_some() && !self.fetch_from.is_some() {
+        // --step requires a fetch mode that supports it
+        if self.step.is_some() && !self.fetch_back.is_some() && !self.fetch_from.is_some() {
             return Err(anyhow!(
-                "--step requires --fetch-continuous, --fetch-back, or --fetch-from"
+                "--step requires --fetch-back or --fetch-from"
             ));
         }
 
@@ -89,8 +87,6 @@ impl Cli {
             FetchMode::Back(duration.clone())
         } else if let Some(date) = &self.fetch_from {
             FetchMode::From(date.clone())
-        } else if self.fetch_continuous {
-            FetchMode::Continuous
         } else {
             FetchMode::None
         }
@@ -121,7 +117,6 @@ pub enum FetchMode {
     Gaps,
     Back(String),  // Duration string
     From(String),  // Date string
-    Continuous,    // Continuous fetching
 }
 
 /// Parse duration string like "5min", "4h", "3d", "1w", "2m", "1y"
@@ -187,6 +182,7 @@ pub fn timestamp_from_date(date_str: &str) -> Result<Timestamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[test]
     fn test_parse_duration() {

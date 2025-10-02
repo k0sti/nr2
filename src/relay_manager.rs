@@ -7,9 +7,10 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::cli::{FetchMode, parse_duration, timestamp_from_date, timestamp_from_duration_ago};
-use crate::config::Config;
-use crate::processor::{create_processor, Processor};
-use crate::state::ProcessingState;
+use nr2::config::Config;
+use nr2::fetcher::Fetcher;
+use nr2::processor::{create_processor, Processor};
+use nr2::state::ProcessingState;
 
 #[derive(Clone)]
 pub struct RelayManager {
@@ -17,10 +18,15 @@ pub struct RelayManager {
     source_client: Client,
     sink_clients: Vec<(Arc<dyn Processor>, Client)>,
     state: Arc<Mutex<ProcessingState>>,
+    no_state: bool,
 }
 
 impl RelayManager {
     pub async fn new(config: Config, state: ProcessingState) -> Result<Self> {
+        Self::new_with_options(config, state, false).await
+    }
+
+    pub async fn new_with_options(config: Config, state: ProcessingState, no_state: bool) -> Result<Self> {
         let source_client = Client::new(Keys::generate());
 
         for relay_url in &config.sources {
@@ -46,6 +52,7 @@ impl RelayManager {
             source_client,
             sink_clients,
             state: Arc::new(Mutex::new(state)),
+            no_state,
         })
     }
 
@@ -119,14 +126,6 @@ impl RelayManager {
                 info!("Fetching events from {}", date);
                 self.fetch_from(&date, step, fetch_limit, wait_seconds).await
             }
-            FetchMode::Continuous => {
-                if let Some(step_duration) = step {
-                    info!("Fetching events continuously backwards with {} steps", step_duration);
-                    self.fetch_continuous(&step_duration, fetch_limit, wait_seconds).await
-                } else {
-                    return Err(anyhow!("--fetch-continuous requires --step"));
-                }
-            }
             FetchMode::None => {
                 warn!("No fetch mode specified");
                 Ok(())
@@ -141,6 +140,7 @@ impl RelayManager {
             source_client: self.source_client.clone(),
             sink_clients: self.sink_clients.clone(),
             state: self.state.clone(),
+            no_state: self.no_state,
         }
     }
 
@@ -183,6 +183,8 @@ impl RelayManager {
                 interval.tick().await;
                 let mut state = state_clone.lock().await;
                 state.checkpoint_session();
+                // Note: This periodic save happens in a spawned task, doesn't have access to no_state flag
+                // But it's okay as it's only for streaming mode checkpoint saves
                 if let Err(e) = state.save(&state_file).await {
                     warn!("[STREAM] Failed to save state: {}", e);
                 }
@@ -253,7 +255,9 @@ impl RelayManager {
         {
             let mut state = self.state.lock().await;
             state.end_session();
-            state.save(&self.config.state_file).await?;
+            if !self.no_state {
+                state.save(&self.config.state_file).await?;
+            }
             info!("Final state: {}", state.get_coverage_stats());
         }
 
@@ -263,119 +267,63 @@ impl RelayManager {
     pub async fn save_state(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         state.end_session();
-        state.save(&self.config.state_file).await?;
+        if !self.no_state {
+            state.save(&self.config.state_file).await?;
+        }
         info!("State saved: {}", state.get_coverage_stats());
         Ok(())
     }
 
     /// Fill gaps only within existing collected spans (one-time operation)
-    async fn fill_gaps_only(&self, _fetch_limit: usize, wait_seconds: u64) -> Result<()> {
+    async fn fill_gaps_only(&self, fetch_limit: usize, _wait_seconds: u64) -> Result<()> {
         info!("[FETCH] Starting gap-filling mode");
 
-        // Get current gaps within existing data
-        let gaps = {
+        // Get the range to check for gaps
+        let (earliest, latest) = {
             let state = self.state.lock().await;
 
             // Only look for gaps if we have existing data
             if state.collected_spans.span_count() == 0 {
                 info!("[FETCH] No existing data to find gaps in");
-                Vec::new()
-            } else if let (Some(earliest), Some(latest)) =
-                (state.collected_spans.earliest(), state.collected_spans.latest()) {
-                // Find gaps within our collected range
-                state.collected_spans.get_gaps(earliest, latest)
-            } else {
-                Vec::new()
+                return Ok(());
+            }
+
+            match (state.collected_spans.earliest(), state.collected_spans.latest()) {
+                (Some(e), Some(l)) => (e, l),
+                _ => {
+                    info!("[FETCH] No valid range for gap filling");
+                    return Ok(());
+                }
             }
         };
 
-        if gaps.is_empty() {
-            info!("[FETCH] No gaps found, exiting");
-            return Ok(());
-        }
+        // Use the fetcher to fill gaps in the range
+        let fetcher = Fetcher::new(
+            self.source_client.clone(),
+            self.sink_clients.clone(),
+        );
 
-            info!("[FETCH] Found {} gaps to fill", gaps.len());
+        let result = {
+            let mut state = self.state.lock().await;
+            let fetch_result = fetcher.fetch_range(earliest, latest, &mut *state, fetch_limit).await?;
 
-            // Process each gap
-            for gap in gaps {
-                info!(
-                    "[FETCH] Filling gap from {} to {} ({} seconds)",
-                    gap.start,
-                    gap.end,
-                    gap.end.as_u64() - gap.start.as_u64()
-                );
-
-                // Create filter for this gap
-                let filter = Filter::new()
-                    .since(gap.start)
-                    .until(gap.end)
-                    .limit(500);  // Reasonable limit per gap query
-
-                match self.source_client.fetch_events(filter, Duration::from_secs(10)).await {
-                    Ok(events) => {
-                        info!("[FETCH] Retrieved {} events for gap", events.len());
-
-                        if !events.is_empty() {
-                            // Track the span we're filling
-                            {
-                                let mut state = self.state.lock().await;
-                                state.collected_spans.add_span(gap.start, gap.end);
-                                state.total_events_processed += events.len() as u64;
-                            }
-
-                            // Process and forward events
-                            for event in events {
-                                debug!("[FETCH] Processing event: {} at {}", event.id, event.created_at);
-
-                                for (processor, client) in &self.sink_clients {
-                                    let processed_events = processor.process(&event);
-
-                                    if processed_events.is_empty() {
-                                        debug!("[FETCH] Event {} filtered out by processor", event.id);
-                                    } else {
-                                        for processed_event in processed_events {
-                                            debug!("[FETCH] Forwarding event {} to sink relays", processed_event.id);
-
-                                            match client.send_event(&processed_event).await {
-                                                Ok(_) => {
-                                                    debug!("[FETCH] Event sent successfully");
-                                                }
-                                                Err(e) => {
-                                                    warn!("[FETCH] Failed to send event to sink relay: {}", e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Save state after processing gap
-                            {
-                                let mut state = self.state.lock().await;
-                                if let Err(e) = state.save(&self.config.state_file).await {
-                                    warn!("[FETCH] Failed to save state: {}", e);
-                                }
-                                info!("[FETCH] State updated: {}", state.get_coverage_stats());
-                            }
-                        } else {
-                            // Even if no events, mark the gap as collected
-                            let mut state = self.state.lock().await;
-                            state.collected_spans.add_span(gap.start, gap.end);
-                            info!("[FETCH] No events in gap, marking as collected");
-                        }
-                    }
-                    Err(e) => {
-                        error!("[FETCH] Failed to fetch events for gap: {}", e);
-                    }
-                }
-
-                // Delay between gap queries if configured
-                if wait_seconds > 0 {
-                    tokio::time::sleep(Duration::from_secs(wait_seconds)).await;
-                }
+            // Save state after fetching
+            if fetch_result.fetched && !self.no_state {
+                state.save(&self.config.state_file).await?;
             }
+            if fetch_result.fetched {
+                info!("[FETCH] Filled {} gaps with {} events",
+                      fetch_result.spans_processed.len(),
+                      fetch_result.events_count);
+            }
+            fetch_result
+        };
 
-        info!("[FETCH] Completed gap-filling");
+        if !result.fetched {
+            info!("[FETCH] No gaps found, exiting");
+        } else {
+            info!("[FETCH] Completed gap-filling");
+        }
         Ok(())
     }
 
@@ -416,71 +364,52 @@ impl RelayManager {
     }
 
     /// Fetch events in a specific time range, considering already processed spans
+    /// Will continue fetching iteratively until the range is covered or max iterations reached
     async fn fetch_range(&self, start: Timestamp, end: Timestamp, limit: usize, wait_seconds: u64) -> Result<()> {
-        // Get gaps in the requested range
-        let gaps = {
-            let state = self.state.lock().await;
-            state.collected_spans.get_gaps(start, end)
-        };
+        let fetcher = Fetcher::new(
+            self.source_client.clone(),
+            self.sink_clients.clone(),
+        );
 
-        if gaps.is_empty() {
-            info!("[FETCH] Range already fully processed");
-            return Ok(());
-        }
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 1000;
 
-        info!("[FETCH] Found {} gaps to fetch", gaps.len());
-
-        for gap in gaps {
-            info!("[FETCH] Fetching gap from {} to {} ({} seconds)",
-                gap.start.as_u64(),
-                gap.end.as_u64(),
-                gap.end.as_u64() - gap.start.as_u64()
-            );
-
-            let filter = Filter::new()
-                .since(gap.start)
-                .until(gap.end)
-                .limit(limit);
-
-            match self.source_client.fetch_events(filter, Duration::from_secs(30)).await {
-                Ok(events) => {
-                    let event_count = events.len();
-                    info!("[FETCH] Retrieved {} events", event_count);
-
-                    // Process and forward events
-                    for event in events {
-                        debug!("[FETCH] Processing event: {} at {}", event.id, event.created_at);
-
-                        for (processor, client) in &self.sink_clients {
-                            let processed_events = processor.process(&event);
-
-                            if !processed_events.is_empty() {
-                                for processed_event in processed_events {
-                                    if let Err(e) = client.send_event(&processed_event).await {
-                                        warn!("[FETCH] Failed to send event: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Update state
-                    {
-                        let mut state = self.state.lock().await;
-                        state.collected_spans.add_span(gap.start, gap.end);
-                        state.total_events_processed += event_count as u64;
-                        state.save(&self.config.state_file).await?;
-                        info!("[FETCH] State updated: {}", state.get_coverage_stats());
-                    }
-                }
-                Err(e) => {
-                    error!("[FETCH] Failed to fetch events: {}", e);
-                }
+        loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                warn!("[FETCH] Hit maximum iteration limit ({}), stopping", MAX_ITERATIONS);
+                break;
             }
 
-            // Delay between fetches if configured
-            if wait_seconds > 0 {
-                tokio::time::sleep(Duration::from_secs(wait_seconds)).await;
+            let result = {
+                let mut state = self.state.lock().await;
+                let fetch_result = fetcher.fetch_range(start, end, &mut *state, limit).await?;
+
+                // Save state after each successful fetch
+                if fetch_result.fetched && !self.no_state {
+                    state.save(&self.config.state_file).await?;
+                }
+                fetch_result
+            };
+
+            if !result.fetched {
+                info!("[FETCH] Range fully processed after {} iterations", iterations - 1);
+                break;
+            }
+
+            // Check if we hit the limit (likely have more to fetch)
+            // If we got exactly 'limit' events or more, continue fetching
+            if result.events_count as usize >= limit {
+                info!("[FETCH] Hit limit, continuing to fetch remaining gaps");
+
+                // Wait between fetches if configured
+                if wait_seconds > 0 {
+                    tokio::time::sleep(Duration::from_secs(wait_seconds)).await;
+                }
+            } else {
+                // Got less than limit, we're probably done
+                info!("[FETCH] Fetched {} events (less than limit), stopping", result.events_count);
+                break;
             }
         }
 
@@ -489,9 +418,13 @@ impl RelayManager {
 
     /// Fetch events in steps (for large time ranges)
     async fn fetch_range_in_steps(&self, start: Timestamp, end: Timestamp, step_seconds: u64, limit: usize, wait_seconds: u64) -> Result<()> {
-        let mut current_start = start;
+        let fetcher = Fetcher::new(
+            self.source_client.clone(),
+            self.sink_clients.clone(),
+        );
 
-        info!("[FETCH] Fetching in steps of {} seconds", step_seconds);
+        let mut current_start = start;
+        let mut total_fetched = false;
 
         while current_start < end {
             let current_end = Timestamp::from(
@@ -503,53 +436,30 @@ impl RelayManager {
                 current_end.as_u64()
             );
 
-            self.fetch_range(current_start, current_end, limit, wait_seconds).await?;
+            let _result = {
+                let mut state = self.state.lock().await;
+                let fetch_result = fetcher.fetch_range(current_start, current_end, &mut *state, limit).await?;
+
+                // Save state after each step if there was fetching
+                if fetch_result.fetched && !self.no_state {
+                    state.save(&self.config.state_file).await?;
+                }
+                if fetch_result.fetched {
+                    total_fetched = true;
+                }
+                fetch_result
+            };
 
             current_start = current_end;
 
-            // Delay between steps if configured
+            // Delay between steps if configured and not at end
             if current_start < end && wait_seconds > 0 {
                 tokio::time::sleep(Duration::from_secs(wait_seconds)).await;
             }
         }
 
-        Ok(())
-    }
-
-    /// Continuously fetch events backwards in time, stepping back by the given duration
-    async fn fetch_continuous(&self, step_duration_str: &str, limit: usize, wait_seconds: u64) -> Result<()> {
-        let step_duration = parse_duration(step_duration_str)?;
-        let step_seconds = step_duration.num_seconds().max(60) as u64;
-
-        info!("[FETCH-CONTINUOUS] Starting continuous backwards fetch with {} second steps", step_seconds);
-
-        let mut current_end = Timestamp::now();
-
-        loop {
-            let current_start = Timestamp::from(current_end.as_u64().saturating_sub(step_seconds));
-
-            info!("[FETCH-CONTINUOUS] Fetching from {} to {}",
-                current_start.as_u64(),
-                current_end.as_u64()
-            );
-
-            // Fetch this time range (fetch_range automatically skips already-fetched spans)
-            self.fetch_range(current_start, current_end, limit, wait_seconds).await?;
-
-            // Move backwards for the next iteration
-            current_end = current_start;
-
-            // Stop if we've gone too far back (e.g., before Nostr existed)
-            if current_end.as_u64() < 1609459200 { // Jan 1, 2021
-                info!("[FETCH-CONTINUOUS] Reached early limit, stopping");
-                break;
-            }
-
-            // Wait before next fetch if configured
-            if wait_seconds > 0 {
-                info!("[FETCH-CONTINUOUS] Waiting {} seconds before next fetch", wait_seconds);
-                tokio::time::sleep(Duration::from_secs(wait_seconds)).await;
-            }
+        if !total_fetched {
+            info!("[FETCH] Range already fully processed");
         }
 
         Ok(())

@@ -1,9 +1,5 @@
 mod cli;
-mod config;
-mod processor;
 mod relay_manager;
-mod state;
-mod timespan;
 
 use anyhow::Result;
 use clap::Parser;
@@ -12,9 +8,9 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::Cli;
-use crate::config::Config;
 use crate::relay_manager::RelayManager;
-use crate::state::ProcessingState;
+use nr2::config::Config;
+use nr2::state::ProcessingState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -62,10 +58,15 @@ async fn main() -> Result<()> {
     info!("  State file: {}", config.state_file);
 
     // Load or create processing state
-    let state_path = PathBuf::from(&config.state_file);
-    let state = ProcessingState::load(&state_path).await?;
+    let state = if cli.no_state {
+        info!("Using in-memory state only (--no-state flag)");
+        ProcessingState::new()
+    } else {
+        let state_path = PathBuf::from(&config.state_file);
+        ProcessingState::load(&state_path).await?
+    };
 
-    let relay_manager = RelayManager::new(config.clone(), state).await?;
+    let relay_manager = RelayManager::new_with_options(config.clone(), state, cli.no_state).await?;
 
     let shutdown = tokio::signal::ctrl_c();
 
@@ -75,6 +76,7 @@ async fn main() -> Result<()> {
     let fetch_limit = cli.limit;
     let wait_seconds = cli.get_wait_seconds();
     let step = cli.get_step();
+    let no_state = cli.no_state;
 
     tokio::select! {
         result = relay_manager.run_with_mode(has_stream, fetch_mode, fetch_limit, wait_seconds, step) => {
@@ -89,8 +91,10 @@ async fn main() -> Result<()> {
 
     info!("Shutting down...");
 
-    // Save final state before disconnecting
-    relay_manager.save_state().await?;
+    // Save final state before disconnecting (unless --no-state)
+    if !no_state {
+        relay_manager.save_state().await?;
+    }
 
     relay_manager.disconnect().await?;
 
