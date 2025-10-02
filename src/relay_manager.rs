@@ -10,6 +10,7 @@ use crate::cli::{FetchMode, parse_duration, timestamp_from_date, timestamp_from_
 use eventflow::config::Config;
 use eventflow::fetcher::Fetcher;
 use eventflow::processor::{create_processor, Processor};
+use eventflow::relay_router::convert_filters_to_nostr;
 use eventflow::state::ProcessingState;
 
 #[derive(Clone)]
@@ -167,12 +168,22 @@ impl RelayManager {
             state.start_session(start_time);
         }
 
-        // Create filter for streaming from now
-        let filter = Filter::new().since(start_time);
+        // Create filters for subscription based on config
+        let filters = if let Some(ref sub_filters) = self.config.filters {
+            convert_filters_to_nostr(sub_filters, Some(start_time))
+        } else {
+            vec![Filter::new().since(start_time)]
+        };
 
-        info!("[STREAM] Starting live stream from {}", start_time);
-        let subscription = self.source_client.subscribe(filter, None).await?;
-        info!("[STREAM] Subscription created: {:?}", subscription);
+        info!("[STREAM] Starting live stream from {} with {} filter(s)", start_time, filters.len());
+
+        // Subscribe with multiple filters (OR logic between them)
+        let mut subscriptions = Vec::new();
+        for filter in filters {
+            let sub = self.source_client.subscribe(filter, None).await?;
+            subscriptions.push(sub);
+        }
+        info!("[STREAM] Created {} subscription(s)", subscriptions.len());
 
         // Setup periodic state saving
         let state_clone = self.state.clone();

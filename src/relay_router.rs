@@ -6,10 +6,121 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, SubFilter};
 use crate::fetcher::Fetcher;
 use crate::processor::Processor;
 use crate::state::ProcessingState;
+
+/// Convert our SubFilter to Nostr SDK Filter
+pub fn convert_filters_to_nostr(filters: &[SubFilter], since: Option<Timestamp>) -> Vec<Filter> {
+    if filters.is_empty() {
+        // No filters specified, return a basic filter with just the since timestamp
+        if let Some(since) = since {
+            return vec![Filter::new().since(since)];
+        } else {
+            return vec![Filter::new()];
+        }
+    }
+
+    filters.iter().map(|sub_filter| {
+        let mut filter = Filter::new();
+
+        if let Some(since) = since {
+            filter = filter.since(since);
+        }
+
+        if let Some(ref authors) = sub_filter.authors {
+            let pubkeys: Vec<PublicKey> = authors.iter()
+                .filter_map(|hex| PublicKey::from_hex(hex).ok())
+                .collect();
+            filter = filter.authors(pubkeys);
+        }
+
+        if let Some(ref kinds) = sub_filter.kinds {
+            let kinds_converted: Vec<Kind> = kinds.iter()
+                .map(|k| Kind::from(*k))
+                .collect();
+            filter = filter.kinds(kinds_converted);
+        }
+
+        // Handle tag filters
+        for (tag_name, values) in &sub_filter.tags {
+            let tag_key = if tag_name.starts_with('#') {
+                &tag_name[1..]
+            } else {
+                tag_name
+            };
+
+            if tag_key.len() == 1 {
+                let tag_char = tag_key.chars().next().unwrap();
+                if let Ok(single_letter_tag) = SingleLetterTag::from_char(tag_char) {
+                    filter = filter.custom_tags(single_letter_tag, values.clone());
+                }
+            }
+        }
+
+        filter
+    }).collect()
+}
+
+/// Check if an event matches any of the provided filters
+pub fn event_matches_filters(event: &Event, filters: &[SubFilter]) -> bool {
+    // If no filters specified, everything passes
+    if filters.is_empty() {
+        return true;
+    }
+
+    // Check if event matches ANY filter (OR logic)
+    for filter in filters {
+        if matches_single_filter(event, filter) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if an event matches a single filter (AND logic for all conditions)
+pub fn matches_single_filter(event: &Event, filter: &SubFilter) -> bool {
+    // Check authors
+    if let Some(ref authors) = filter.authors {
+        if !authors.contains(&event.pubkey.to_hex()) {
+            return false;
+        }
+    }
+
+    // Check kinds
+    if let Some(ref kinds) = filter.kinds {
+        if !kinds.contains(&event.kind.as_u16()) {
+            return false;
+        }
+    }
+
+    // Check tag filters
+    for (tag_name, filter_values) in &filter.tags {
+        // Handle both "#e" and "e" format
+        let tag_key = if tag_name.starts_with('#') {
+            &tag_name[1..]
+        } else {
+            tag_name
+        };
+
+        // Get all values for this tag from the event
+        let event_tag_values: Vec<String> = event.tags
+            .iter()
+            .filter(|tag| tag.kind().to_string() == tag_key)
+            .filter_map(|tag| tag.content().map(|s| s.to_string()))
+            .collect();
+
+        // At least one event tag value must match one filter value
+        if event_tag_values.is_empty() ||
+           !event_tag_values.iter().any(|ev| filter_values.contains(ev)) {
+            return false;
+        }
+    }
+
+    true
+}
 
 /// A builder for creating a RelayRouter with custom processors
 pub struct RelayRouterBuilder {
@@ -177,12 +288,22 @@ impl RelayRouter {
             state.start_session(start_time);
         }
 
-        // Create filter for streaming from now
-        let filter = Filter::new().since(start_time);
+        // Create filters for subscription based on config
+        let filters = if let Some(ref sub_filters) = self.config.filters {
+            convert_filters_to_nostr(sub_filters, Some(start_time))
+        } else {
+            vec![Filter::new().since(start_time)]
+        };
 
-        info!("[STREAM] Starting live stream from {}", start_time);
-        let subscription = self.source_client.subscribe(filter, None).await?;
-        info!("[STREAM] Subscription created: {:?}", subscription);
+        info!("[STREAM] Starting live stream from {} with {} filter(s)", start_time, filters.len());
+
+        // Subscribe with multiple filters (OR logic between them)
+        let mut subscriptions = Vec::new();
+        for filter in filters {
+            let sub = self.source_client.subscribe(filter, None).await?;
+            subscriptions.push(sub);
+        }
+        info!("[STREAM] Created {} subscription(s)", subscriptions.len());
 
         // Setup periodic state saving
         let state_clone = self.state.clone();

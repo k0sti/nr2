@@ -6,12 +6,13 @@ pub mod state;
 pub mod timespan;
 
 // Re-export commonly used types for convenience
-pub use config::{Config, ProcessorType, SinkConfig};
+pub use config::{Config, SubFilter, ProcessorType, SinkConfig};
 pub use fetcher::{Fetcher, FetchResult};
 pub use processor::{
     create_processor,
     GeohashFilterProcessor,
     PassthroughProcessor,
+    WaitProcessor,
     Processor
 };
 pub use relay_router::{RelayRouter, RelayRouterBuilder};

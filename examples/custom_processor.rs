@@ -1,6 +1,7 @@
 use anyhow::Result;
 use eventflow::{
-    Config, Event, ProcessingState, Processor, RelayRouter, RelayRouterBuilder, Timestamp,
+    Config, Event, ProcessingState, Processor, RelayRouter, RelayRouterBuilder, SubFilter, Timestamp,
+    WaitProcessor,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -199,9 +200,59 @@ async fn main() -> Result<()> {
         router.disconnect().await?;
     }
 
-    // Example 4: Direct use as a library with custom fetch range
+    // Example 4: Using the WaitProcessor to test slow processing
     {
-        info!("Example 4: Custom fetch range");
+        info!("Example 4: Testing slow processor with WaitProcessor");
+
+        // Create a WaitProcessor with 2 second delay
+        let wait_processor = Arc::new(WaitProcessor::new(2000));
+
+        info!("Creating router with WaitProcessor (2 second delay per event)");
+        let _router = RelayRouterBuilder::new(config.clone())
+            .with_state(state.clone())
+            .no_state(true)
+            .add_processor(
+                wait_processor,
+                vec!["wss://relay.example.com".to_string()],
+            )
+            .build()
+            .await?;
+
+        // In real usage, this would slow down event processing significantly
+        info!("Router created with slow processor - each event will be delayed by 2 seconds");
+    }
+
+    // Example 5: Using global filters with custom processor
+    {
+        info!("Example 5: Using global source filters");
+
+        // Create a config with filters at source level
+        let mut filtered_config = config.clone();
+        filtered_config.filters = Some(vec![
+            SubFilter {
+                kinds: Some(vec![1, 30023]), // Text notes and long-form content
+                ..Default::default()
+            }
+        ]);
+
+        let text_processor = Arc::new(KindFilterProcessor::new(vec![1]));
+
+        let _router = RelayRouterBuilder::new(filtered_config)
+            .with_state(state.clone())
+            .no_state(true)
+            .add_processor(
+                text_processor,
+                vec!["wss://relay.example.com".to_string()],
+            )
+            .build()
+            .await?;
+
+        info!("Router created with source filters - only matching events are fetched from sources");
+    }
+
+    // Example 6: Direct use as a library with custom fetch range
+    {
+        info!("Example 6: Custom fetch range");
 
         let router = RelayRouter::new(config.clone(), state.clone()).await?;
 

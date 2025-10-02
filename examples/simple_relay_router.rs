@@ -15,6 +15,7 @@ async fn main() -> Result<()> {
             "wss://relay.damus.io".to_string(),
             "wss://nos.lol".to_string(),
         ],
+        filters: None,  // No global filters
         sinks: vec![],
         state_file: "example_state.json".to_string(),
     };
