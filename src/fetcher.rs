@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::config::SubFilter;
 use crate::processor::Processor;
+use crate::relay_router::convert_filters_to_nostr;
 use crate::state::ProcessingState;
 use crate::timespan::TimeSpan;
 
@@ -18,6 +20,7 @@ pub struct FetchResult {
 pub struct Fetcher {
     source_client: Client,
     sink_clients: Vec<(Arc<dyn Processor>, Client)>,
+    filters: Option<Vec<SubFilter>>,
 }
 
 impl Fetcher {
@@ -25,6 +28,19 @@ impl Fetcher {
         Self {
             source_client,
             sink_clients,
+            filters: None,
+        }
+    }
+
+    pub fn new_with_filters(
+        source_client: Client,
+        sink_clients: Vec<(Arc<dyn Processor>, Client)>,
+        filters: Option<Vec<SubFilter>>,
+    ) -> Self {
+        Self {
+            source_client,
+            sink_clients,
+            filters,
         }
     }
 
@@ -62,74 +78,97 @@ impl Fetcher {
                 gap.end.as_u64() - gap.start.as_u64()
             );
 
-            let mut filter = Filter::new()
-                .since(gap.start)
-                .until(gap.end);
+            // Create filters using the same logic as live streaming
+            let filters = if let Some(ref sub_filters) = self.filters {
+                let mut converted_filters = convert_filters_to_nostr(sub_filters, Some(gap.start));
+                // Apply until constraint and limit to all filters
+                for filter in &mut converted_filters {
+                    *filter = filter.clone().until(gap.end);
+                    if limit > 0 {
+                        *filter = filter.clone().limit(limit);
+                    }
+                }
+                converted_filters
+            } else {
+                let mut filter = Filter::new()
+                    .since(gap.start)
+                    .until(gap.end);
+                if limit > 0 {
+                    filter = filter.limit(limit);
+                }
+                vec![filter]
+            };
 
-            // Only add limit if it's greater than 0
-            if limit > 0 {
-                filter = filter.limit(limit);
+            // Fetch events with all filters (OR logic between them)
+            let mut all_events = Vec::new();
+            for filter in filters {
+                match self.source_client.fetch_events(filter, Duration::from_secs(30)).await {
+                    Ok(events) => {
+                        all_events.extend(events);
+                    }
+                    Err(e) => {
+                        warn!("[FETCH] Failed to fetch events with filter: {}", e);
+                        continue;
+                    }
+                }
             }
 
-            match self.source_client.fetch_events(filter, Duration::from_secs(30)).await {
-                Ok(events) => {
-                    let event_count = events.len();
-                    info!("[FETCH] Retrieved {} events", event_count);
+            // Remove duplicates by event ID (in case filters overlap)
+            all_events.sort_by_key(|e| e.id);
+            all_events.dedup_by_key(|e| e.id);
 
-                    if event_count > 0 {
-                        // Find the actual time range of events we received
-                        let first_event = events.first().unwrap();
-                        let mut min_timestamp = first_event.created_at;
-                        let mut max_timestamp = first_event.created_at;
+            let events = all_events;
+            let event_count = events.len();
+            info!("[FETCH] Retrieved {} events", event_count);
 
-                        // Process and forward events
-                        for event in events.iter() {
-                            debug!("[FETCH] Processing event: {} at {}", event.id, event.created_at);
+            if event_count > 0 {
+                // Find the actual time range of events we received
+                let first_event = events.first().unwrap();
+                let mut min_timestamp = first_event.created_at;
+                let mut max_timestamp = first_event.created_at;
 
-                            // Track the actual time range
-                            if event.created_at < min_timestamp {
-                                min_timestamp = event.created_at;
-                            }
-                            if event.created_at > max_timestamp {
-                                max_timestamp = event.created_at;
-                            }
+                // Process and forward events
+                for event in events.iter() {
+                    debug!("[FETCH] Processing event: {} at {}", event.id, event.created_at);
 
-                            for (processor, client) in &self.sink_clients {
-                                let processed_events = processor.process(event);
+                    // Track the actual time range
+                    if event.created_at < min_timestamp {
+                        min_timestamp = event.created_at;
+                    }
+                    if event.created_at > max_timestamp {
+                        max_timestamp = event.created_at;
+                    }
 
-                                if !processed_events.is_empty() {
-                                    for processed_event in processed_events {
-                                        if let Err(e) = client.send_event(&processed_event).await {
-                                            warn!("[FETCH] Failed to send event: {}", e);
-                                        }
-                                    }
+                    for (processor, client) in &self.sink_clients {
+                        let processed_events = processor.process(event);
+
+                        if !processed_events.is_empty() {
+                            for processed_event in processed_events {
+                                if let Err(e) = client.send_event(&processed_event).await {
+                                    warn!("[FETCH] Failed to send event: {}", e);
                                 }
                             }
                         }
-
-                        // Always mark only the actual range we received, not the requested range
-                        // This is more conservative but handles relay limits correctly
-                        info!("[FETCH] Got {} events, marking actual range: {} to {}",
-                              event_count, min_timestamp, max_timestamp);
-                        state.collected_spans.add_span(min_timestamp, max_timestamp);
-                        spans_processed.push(TimeSpan::new(min_timestamp, max_timestamp));
-
-                        state.total_events_processed += event_count as u64;
-                        total_events += event_count as u64;
-                    } else {
-                        // No events in this gap, but we checked it
-                        info!("[FETCH] No events in gap, marking as checked");
-                        state.collected_spans.add_span(gap.start, gap.end);
-                        spans_processed.push(gap.clone());
                     }
+                }
 
-                    info!("[FETCH] State updated: {}", state.get_coverage_stats());
-                }
-                Err(e) => {
-                    warn!("[FETCH] Failed to fetch events for gap: {}", e);
-                    // Continue with next gap even if one fails
-                }
+                // Always mark only the actual range we received, not the requested range
+                // This is more conservative but handles relay limits correctly
+                info!("[FETCH] Got {} events, marking actual range: {} to {}",
+                      event_count, min_timestamp, max_timestamp);
+                state.collected_spans.add_span(min_timestamp, max_timestamp);
+                spans_processed.push(TimeSpan::new(min_timestamp, max_timestamp));
+
+                state.total_events_processed += event_count as u64;
+                total_events += event_count as u64;
+            } else {
+                // No events in this gap, but we checked it
+                info!("[FETCH] No events in gap, marking as checked");
+                state.collected_spans.add_span(gap.start, gap.end);
+                spans_processed.push(gap.clone());
             }
+
+            info!("[FETCH] State updated: {}", state.get_coverage_stats());
 
         }
 
