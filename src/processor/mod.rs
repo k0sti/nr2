@@ -29,12 +29,12 @@ pub use wait::WaitProcessor;
 /// use eventflow::Processor;
 ///
 /// struct KindFilterProcessor {
-///     allowed_kinds: Vec<u64>,
+///     allowed_kinds: Vec<u16>,
 /// }
 ///
 /// impl Processor for KindFilterProcessor {
 ///     fn process(&self, event: &Event) -> Vec<Event> {
-///         if self.allowed_kinds.contains(&event.kind.as_u64()) {
+///         if self.allowed_kinds.contains(&event.kind.as_u16()) {
 ///             vec![event.clone()]
 ///         } else {
 ///             vec![]

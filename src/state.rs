@@ -155,6 +155,146 @@ impl ProcessingState {
         self.stats.total_gaps_filled += 1;
         info!("Filled gap: {} to {}", start, end);
     }
+
+    /// Show processing state in a formatted display
+    pub async fn show_state_from_config(config_path: &std::path::Path) -> anyhow::Result<()> {
+        use crate::config::Config;
+
+        let config = if config_path.exists() {
+            Config::load(&config_path).await?
+        } else {
+            Config::default()
+        };
+
+        let state_path = std::path::PathBuf::from(&config.state_file);
+
+        if !state_path.exists() {
+            println!("No state file found at: {}", config.state_file);
+            return Ok(());
+        }
+
+        let state = ProcessingState::load(&state_path).await?;
+        state.display();
+        Ok(())
+    }
+
+    /// Display the state in a formatted way
+    pub fn display(&self) {
+        use chrono::{DateTime, Utc};
+
+        // Helper function to format timestamp
+        let format_timestamp = |ts: Timestamp| -> String {
+            let secs = ts.as_u64() as i64;
+            let dt = DateTime::<Utc>::from_timestamp(secs, 0)
+                .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        };
+
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║                EventFlow Processing State                    ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ Total Events Processed: {:>36} ║", self.total_events_processed);
+        println!("║ Total Sessions:         {:>36} ║", self.stats.sessions_count);
+        println!("║ Total Gaps Filled:      {:>36} ║", self.stats.total_gaps_filled);
+        println!("╠══════════════════════════════════════════════════════════════╣");
+
+        // Current session info
+        if let Some(start) = self.session_start {
+            println!("║ Current Session:                                              ║");
+            let started_line = format!("Started: {}", format_timestamp(start));
+            println!("║   {:<60} ║", started_line);
+            if let Some(last) = self.session_last_event {
+                let last_line = format!("Last Event: {}", format_timestamp(last));
+                println!("║   {:<60} ║", last_line);
+                let duration = last.as_u64() - start.as_u64();
+                let duration_line = format!("Duration: {}", format_duration(duration));
+                println!("║   {:<60} ║", duration_line);
+            }
+            println!("╠══════════════════════════════════════════════════════════════╣");
+        }
+
+        // Coverage info
+        println!("║ Coverage Information:                                        ║");
+        let spans = self.collected_spans.spans();
+        println!("║   Time Spans Collected: {:>36} ║", spans.len());
+
+        if !spans.is_empty() {
+            let earliest = self.collected_spans.earliest().unwrap();
+            let latest = self.collected_spans.latest().unwrap();
+            println!("║   Earliest: {}                              ║", format_timestamp(earliest));
+            println!("║   Latest:   {}                              ║", format_timestamp(latest));
+
+            let total_coverage = self.collected_spans.total_coverage_seconds();
+            let coverage_str = format_duration(total_coverage);
+            println!("║   Total Coverage: {:<42} ║", coverage_str);
+
+            // Show individual spans
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║ Time Spans:                                                  ║");
+            for (i, span) in spans.iter().enumerate() {
+                if i < 10 {  // Show first 10 spans
+                    let span_line = format!("{}. {} to {}",
+                        i + 1,
+                        format_timestamp(span.start),
+                        format_timestamp(span.end)
+                    );
+                    println!("║   {:<58} ║", span_line);
+                    let duration = span.end.as_u64() - span.start.as_u64();
+                    let duration_line = format!("   Duration: {}", format_duration(duration));
+                    println!("║   {:<58} ║", duration_line);
+                }
+            }
+            if spans.len() > 10 {
+                println!("║   ... and {} more spans                                      ║", spans.len() - 10);
+            }
+        }
+
+        // Show gaps in the last 7 days
+        let now = Timestamp::now();
+        let seven_days_ago = Timestamp::from(now.as_u64().saturating_sub(7 * 24 * 60 * 60));
+        let gaps = self.collected_spans.get_gaps(seven_days_ago, now);
+
+        if !gaps.is_empty() {
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║ Gaps in Last 7 Days:                                         ║");
+            for (i, gap) in gaps.iter().enumerate() {
+                if i < 5 {  // Show first 5 gaps
+                    let gap_line = format!("{}. {} to {}",
+                        i + 1,
+                        format_timestamp(gap.start),
+                        format_timestamp(gap.end)
+                    );
+                    println!("║   {:<58} ║", gap_line);
+                    let duration = gap.end.as_u64() - gap.start.as_u64();
+                    let missing_line = format!("   Missing: {}", format_duration(duration));
+                    println!("║   {:<58} ║", missing_line);
+                }
+            }
+            if gaps.len() > 5 {
+                let more_line = format!("... and {} more gaps", gaps.len() - 5);
+                println!("║   {:<60} ║", more_line);
+            }
+        }
+
+        println!("╚══════════════════════════════════════════════════════════════╝");
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+
+    if days > 0 {
+        format!("{:2}d {:2}h {:2}m {:2}s", days, hours, minutes, secs)
+    } else if hours > 0 {
+        format!("{:2}h {:2}m {:2}s", hours, minutes, secs)
+    } else if minutes > 0 {
+        format!("{:2}m {:2}s", minutes, secs)
+    } else {
+        format!("{:2}s", secs)
+    }
 }
 
 impl Default for ProcessingState {

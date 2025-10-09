@@ -410,14 +410,9 @@ impl RelayRouter {
         );
 
         let mut iterations = 0;
-        const MAX_ITERATIONS: usize = 1000;
 
         loop {
             iterations += 1;
-            if iterations > MAX_ITERATIONS {
-                warn!("[FETCH] Hit maximum iteration limit ({}), stopping", MAX_ITERATIONS);
-                break;
-            }
 
             let result = {
                 let mut state = self.state.lock().await;

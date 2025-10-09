@@ -62,10 +62,14 @@ impl Fetcher {
                 gap.end.as_u64() - gap.start.as_u64()
             );
 
-            let filter = Filter::new()
+            let mut filter = Filter::new()
                 .since(gap.start)
-                .until(gap.end)
-                .limit(limit);
+                .until(gap.end);
+
+            // Only add limit if it's greater than 0
+            if limit > 0 {
+                filter = filter.limit(limit);
+            }
 
             match self.source_client.fetch_events(filter, Duration::from_secs(30)).await {
                 Ok(events) => {
@@ -103,21 +107,12 @@ impl Fetcher {
                             }
                         }
 
-                        // Check if we likely hit the limit (got exactly limit events)
-                        let hit_limit = event_count >= limit;
-
-                        if hit_limit {
-                            // We probably have more events, only mark the actual range we got
-                            info!("[FETCH] Hit limit ({} events), marking only actual range: {} to {}",
-                                  event_count, min_timestamp, max_timestamp);
-                            state.collected_spans.add_span(min_timestamp, max_timestamp);
-                            spans_processed.push(TimeSpan::new(min_timestamp, max_timestamp));
-                        } else {
-                            // We got all events in this gap, safe to mark the entire gap
-                            info!("[FETCH] Got all {} events in gap, marking complete range", event_count);
-                            state.collected_spans.add_span(gap.start, gap.end);
-                            spans_processed.push(gap.clone());
-                        }
+                        // Always mark only the actual range we received, not the requested range
+                        // This is more conservative but handles relay limits correctly
+                        info!("[FETCH] Got {} events, marking actual range: {} to {}",
+                              event_count, min_timestamp, max_timestamp);
+                        state.collected_spans.add_span(min_timestamp, max_timestamp);
+                        spans_processed.push(TimeSpan::new(min_timestamp, max_timestamp));
 
                         state.total_events_processed += event_count as u64;
                         total_events += event_count as u64;

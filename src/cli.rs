@@ -77,6 +77,16 @@ impl Cli {
             ));
         }
 
+        // Validate step size if provided
+        if let Some(step_str) = &self.step {
+            let duration = parse_duration(step_str)?;
+            if duration.num_seconds() <= 0 {
+                return Err(anyhow!(
+                    "Step size must be greater than 0 (got: {})", step_str
+                ));
+            }
+        }
+
         Ok(())
     }
 
