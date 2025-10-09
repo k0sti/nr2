@@ -44,6 +44,7 @@ pub struct SinkConfig {
 pub enum ProcessorType {
     Passthrough,
     WaitProcessor,
+    Print,
     GeohashFilter {
         #[serde(default)]
         allowed_prefixes: Vec<String>,

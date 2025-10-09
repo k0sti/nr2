@@ -404,9 +404,10 @@ impl RelayRouter {
         limit: usize,
         wait_seconds: u64,
     ) -> Result<()> {
-        let fetcher = Fetcher::new(
+        let fetcher = Fetcher::new_with_filters(
             self.source_client.clone(),
             self.sink_clients.clone(),
+            self.config.filters.clone(),
         );
 
         let mut iterations = 0;
@@ -471,9 +472,10 @@ impl RelayRouter {
         };
 
         // Use the fetcher to fill gaps in the range
-        let fetcher = Fetcher::new(
+        let fetcher = Fetcher::new_with_filters(
             self.source_client.clone(),
             self.sink_clients.clone(),
+            self.config.filters.clone(),
         );
 
         let result = {

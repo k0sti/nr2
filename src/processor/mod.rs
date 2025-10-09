@@ -11,10 +11,12 @@ use crate::config::ProcessorType;
 mod passthrough;
 mod geohash_filter;
 mod wait;
+mod print;
 
 pub use passthrough::PassthroughProcessor;
 pub use geohash_filter::GeohashFilterProcessor;
 pub use wait::WaitProcessor;
+pub use print::PrintProcessor;
 
 /// Trait for processing Nostr events.
 ///
@@ -113,6 +115,7 @@ pub fn create_processor(processor_type: &ProcessorType) -> Box<dyn Processor> {
     match processor_type {
         ProcessorType::Passthrough => Box::new(PassthroughProcessor::new()),
         ProcessorType::WaitProcessor => Box::new(WaitProcessor::default_5s()),
+        ProcessorType::Print => Box::new(PrintProcessor::new()),
         ProcessorType::GeohashFilter { allowed_prefixes } => {
             Box::new(GeohashFilterProcessor::new(allowed_prefixes.clone()))
         }
